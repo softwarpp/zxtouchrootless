@@ -26,6 +26,8 @@
 #define TASK_COLOR_SEARCHER 28
 #define TASK_PROMPT_INPUT 29
 #define TASK_SCREENSHOT 30
+#define TASK_ACCESSIBILITY_TREE 31
+#define TASK_ACCESSIBILITY_HIERARCHY 32
 
 
 // Used only by zxtouch-runner on its own connection. See Runner.h.

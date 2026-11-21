@@ -19,6 +19,7 @@
 #include "UpdateCache.h"
 #include "Screen.h"
 #include "Runner.h"
+#include "AccessibilityTree.h"
 
 extern CFRunLoopRef recordRunLoop;
 
@@ -300,6 +301,90 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
                 result = [[result stringByReplacingOccurrencesOfString:@"\r" withString:@" "] stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
                 notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", result] UTF8String], writeStreamRef);
             }
+        }
+    }
+    else if (taskType == TASK_ACCESSIBILITY_HIERARCHY)
+    {
+        @autoreleasepool {
+            if (!writeStreamRef) return;
+            NSError *error = nil;
+            NSData *treeData = zxCopyAccessibilityTree(&error);
+            if (!treeData) {
+                NSLog(@"com.zjx.springboard: AX hierarchy failed: %@", error);
+                notifyClient((UInt8 *)"-1;;AX hierarchy unavailable\r\n", writeStreamRef);
+                return;
+            }
+            NSString *header = [NSString stringWithFormat:@"0;;application/json;;%lu\r\n",
+                                (unsigned long)[treeData length]];
+            NSData *headerData = [header dataUsingEncoding:NSUTF8StringEncoding];
+            if (notifyClientData((const UInt8 *)[headerData bytes], (CFIndex)[headerData length],
+                                 writeStreamRef) != 0) return;
+            notifyClientData((const UInt8 *)[treeData bytes], (CFIndex)[treeData length], writeStreamRef);
+        }
+    }
+    else if (taskType == TASK_ACCESSIBILITY_TREE)
+    {
+        @autoreleasepool {
+            if (!writeStreamRef) {
+                return;
+            }
+            NSDictionary *parameters = @{@"name": @"get_ui_elements",
+                                         @"arguments": @{@"visible_only": @YES,
+                                                         @"clickable_only": @NO,
+                                                         @"max_elements": @2000,
+                                                         @"debug": @NO}};
+            NSDictionary *message = @{@"jsonrpc": @"2.0", @"id": @1,
+                                      @"method": @"tools/call", @"params": parameters};
+            NSError *encodingError = nil;
+            NSData *body = [NSJSONSerialization dataWithJSONObject:message options:0 error:&encodingError];
+            if (!body) {
+                notifyClient((UInt8 *)"-1;;Unable to encode AX request\r\n", writeStreamRef);
+                return;
+            }
+
+            NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:
+                [NSURL URLWithString:@"http://127.0.0.1:8090/mcp"]];
+            [request setHTTPMethod:@"POST"];
+            [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+            [request setValue:@"application/json, text/event-stream" forHTTPHeaderField:@"Accept"];
+            [request setHTTPBody:body];
+            [request setTimeoutInterval:20];
+
+            __block NSData *responseData = nil;
+            __block NSInteger responseStatus = 0;
+            dispatch_semaphore_t finished = dispatch_semaphore_create(0);
+            NSURLSession *session = [NSURLSession sessionWithConfiguration:
+                [NSURLSessionConfiguration ephemeralSessionConfiguration]];
+            NSURLSessionDataTask *task = [session dataTaskWithRequest:request
+                completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+                    if (!error) {
+                        responseData = data;
+                        responseStatus = [(NSHTTPURLResponse *)response statusCode];
+                    }
+                    dispatch_semaphore_signal(finished);
+                }];
+            [task resume];
+            if (dispatch_semaphore_wait(finished,
+                dispatch_time(DISPATCH_TIME_NOW, 25 * NSEC_PER_SEC)) != 0) {
+                [task cancel];
+                [session invalidateAndCancel];
+                notifyClient((UInt8 *)"-1;;AX service request timed out\r\n", writeStreamRef);
+                return;
+            }
+            [session finishTasksAndInvalidate];
+            if (responseStatus != 200 || [responseData length] == 0) {
+                notifyClient((UInt8 *)"-1;;AX service unavailable or request failed\r\n", writeStreamRef);
+                return;
+            }
+            NSString *header = [NSString stringWithFormat:@"0;;application/json;;%lu\r\n",
+                                (unsigned long)[responseData length]];
+            NSData *headerData = [header dataUsingEncoding:NSUTF8StringEncoding];
+            if (notifyClientData((const UInt8 *)[headerData bytes],
+                                 (CFIndex)[headerData length], writeStreamRef) != 0) {
+                return;
+            }
+            notifyClientData((const UInt8 *)[responseData bytes],
+                             (CFIndex)[responseData length], writeStreamRef);
         }
     }
     else if (taskType == TASK_SCREENSHOT)

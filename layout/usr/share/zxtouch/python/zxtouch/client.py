@@ -481,5 +481,62 @@ class zxtouch:
 
         return True, result[1]
 
+    def get_ui_elements(self):
+        """Return the native AX snapshot from the on-device ios-mcp service."""
+        from zxtouch.ax import decode_mcp_elements
+
+        self.s.sendall(datahandler.format_socket_data(tasktypes.TASK_ACCESSIBILITY_TREE))
+        fields = self._recv_line()[:-2].split(b";;")
+        if not fields or fields[0] != b"0":
+            detail = fields[1].decode("utf-8", errors="replace") if len(fields) > 1 else "unknown error"
+            raise RuntimeError("ZXTouch AX query failed: {}".format(detail))
+        if len(fields) != 3 or fields[1] != b"application/json":
+            raise RuntimeError("Malformed ZXTouch AX response header")
+        try:
+            length = int(fields[2])
+        except ValueError as error:
+            raise RuntimeError("Malformed ZXTouch AX response length") from error
+        if length <= 0:
+            raise RuntimeError("Invalid ZXTouch AX response length")
+        return decode_mcp_elements(self._recv_exact(length))
+
+    def get_element_tree(self):
+        """Return the frontmost application's native AX hierarchy."""
+        import json
+
+        self.s.sendall(datahandler.format_socket_data(tasktypes.TASK_ACCESSIBILITY_HIERARCHY))
+        fields = self._recv_line()[:-2].split(b";;")
+        if not fields or fields[0] != b"0":
+            detail = fields[1].decode("utf-8", errors="replace") if len(fields) > 1 else "unknown error"
+            raise RuntimeError("ZXTouch AX hierarchy failed: {}".format(detail))
+        if len(fields) != 3 or fields[1] != b"application/json":
+            raise RuntimeError("Malformed ZXTouch AX hierarchy response header")
+        try:
+            length = int(fields[2])
+        except ValueError as error:
+            raise RuntimeError("Malformed ZXTouch AX hierarchy response length") from error
+        if length <= 0:
+            raise RuntimeError("Invalid ZXTouch AX hierarchy response length")
+        tree = json.loads(self._recv_exact(length))
+        if not isinstance(tree, dict) or not isinstance(tree.get("root"), dict):
+            raise RuntimeError("AX hierarchy response is missing root")
+        return tree
+
+    def find_tree_elements(self, *, identifier=None, label=None, value=None,
+                           role=None, tree=None):
+        """Find nodes recursively by their native AX attributes."""
+        from zxtouch.ax import find_tree_elements
+        if tree is None:
+            tree = self.get_element_tree()
+        return find_tree_elements(tree, identifier=identifier, label=label,
+                                  value=value, role=role)
+
+    def find_elements(self, *, text=None, type=None, clickable=None, snapshot=None):
+        """Find native AX nodes with all supplied attributes matched exactly."""
+        from zxtouch.ax import find_elements
+        if snapshot is None:
+            snapshot = self.get_ui_elements()
+        return find_elements(snapshot, text=text, type=type, clickable=clickable)
+
     def disconnect(self):
         self.s.close()

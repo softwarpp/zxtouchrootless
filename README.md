@@ -182,6 +182,36 @@ device = zxtouch("127.0.0.1")  # use device IP for remote control
 | `image_match` | Working (Accelerate.framework, no OpenCV) |
 | `screenshot` | Working (direct in-memory JPEG over TCP) |
 | `insert_text` / `show_keyboard` / `hide_keyboard` / `move_cursor` | Working (via appdelegate tweak) |
+| `get_ui_elements` / `find_elements` | Flat AX nodes through a running ios-mcp service |
+| `get_element_tree` / `find_tree_elements` | Native hierarchical AXChildren traversal in SpringBoard |
+
+### Native accessibility elements
+
+Install the free, open-source [ios-mcp rootless package](https://github.com/witchan/ios-mcp/releases) on the same jailbroken device as ZXTouch and start its service. Check `http://127.0.0.1:8090/health` on the device. ZXTouch forwards task 31 over its existing TCP port 6000 to ios-mcp's local `/mcp` endpoint; no WebDriverAgent or XCTest runner is involved. The default query includes visible nodes, up to 2000.
+
+```python
+from zxtouch.client import zxtouch
+
+device = zxtouch("127.0.0.1")
+snapshot = device.get_ui_elements()
+print(snapshot["screen"], snapshot["count"])
+for element in device.find_elements(text="通用", clickable=True, snapshot=snapshot):
+    print(element["text"], element["rect"], element.get("tap"))
+```
+
+Computer-side clients use the device address when constructing `zxtouch(ip)`; ios-mcp stays on the phone and only the ZXTouch socket is used by the flat-node API. Flat nodes contain `index`, `type` (`control` or `element`), `text`, `clickable`, `rect`, `visible_rect`, and `tap`; coordinates use screen points. `find_elements()` matches exact `text`, `type`, and `clickable` values and can reuse a snapshot. ios-mcp's public tool does not expose parent/child edges or stable identifiers, so use the separate native hierarchy command for those fields.
+
+```python
+from zxtouch.client import zxtouch
+
+device = zxtouch("127.0.0.1")
+tree = device.get_element_tree()
+print(tree["pid"], tree["count"], tree["root"]["children"])
+for node in device.find_tree_elements(identifier="general", tree=tree):
+    print(node.get("label"), node.get("role"), node.get("frame"))
+```
+
+Task 32 uses AXRuntime directly in the SpringBoard tweak: it resolves the focused application PID, traverses `AXChildren`, and returns a nested `root` with `children`, `identifier`, `label`, `value`, `role`, `description`, `enabled`, and `frame` when each attribute is provided by iOS. Enumeration stops at 2000 nodes or depth 64. These identifiers come from `AXIdentifier`, not ios-mcp's temporary `c.N` indexes. This command does not use WDA; unlike the flat-node command it also does not require ios-mcp. AXRuntime and the device's accessibility service must return the target app's children for the hierarchy query to succeed.
 
 ---
 
