@@ -32,7 +32,12 @@ static NSString *zxString(CFTypeRef value)
 static CFTypeRef zxAttribute(CFTypeRef element, CFStringRef key)
 {
     CFTypeRef value = NULL;
-    return zxCopyAttribute(element, key, &value) == 0 ? value : NULL;
+    int32_t status = zxCopyAttribute(element, key, &value);
+    if (status != 0) {
+        if (value) CFRelease(value);
+        return NULL;
+    }
+    return value;
 }
 
 static NSDictionary *zxFrame(CFTypeRef element)
@@ -94,6 +99,7 @@ static NSDictionary *zxNode(CFTypeRef element, NSUInteger depth, NSUInteger *cou
 
 NSData *zxCopyAccessibilityTree(NSError **error)
 {
+    @synchronized([NSProcessInfo processInfo]) {
     void *frontBoard = dlopen("/System/Library/PrivateFrameworks/AXFrontBoardUtils.framework/AXFrontBoardUtils", RTLD_LAZY);
     ZXFocusedPID focusedPID = frontBoard ? (ZXFocusedPID)dlsym(frontBoard, "AXFrontBoardFocusedAppPID") : NULL;
     pid_t pid = focusedPID ? focusedPID() : 0;
@@ -151,7 +157,14 @@ NSData *zxCopyAccessibilityTree(NSError **error)
     ZXSetTimeout setTimeout = (ZXSetTimeout)dlsym(runtime, "AXUIElementSetMessagingTimeout");
     if (setTimeout) setTimeout(application, 5.0f);
     NSUInteger count = 0;
-    NSDictionary *tree = zxNode(application, 0, &count);
+    NSDictionary *tree = nil;
+    const useconds_t delays[] = {150000, 450000, 900000};
+    for (NSUInteger attempt = 0; attempt < 4; ++attempt) {
+        count = 0;
+        tree = zxNode(application, 0, &count);
+        if (count > 1) break;
+        if (attempt < 3) usleep(delays[attempt]);
+    }
     CFRelease(application);
     if (count <= 1) {
         if (error) *error = [NSError errorWithDomain:@"ZXTouchAX" code:3
@@ -160,4 +173,5 @@ NSData *zxCopyAccessibilityTree(NSError **error)
     }
     return [NSJSONSerialization dataWithJSONObject:@{@"pid": @(pid), @"count": @(count),
                                                      @"root": tree} options:0 error:error];
+    }
 }
